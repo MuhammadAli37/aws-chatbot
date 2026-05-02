@@ -33,10 +33,11 @@ permissions:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'shu-chatbot' }}
-  ECS_CLUSTER: ${{ vars.ECS_CLUSTER || 'shu-chatbot-cluster' }}
-  ECS_SERVICE: ${{ vars.ECS_SERVICE || 'shu-chatbot-service' }}
-  CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'shu-chatbot' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'shu-chatbot-production' }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER || 'shu-chatbot-production-cluster' }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE || 'shu-chatbot-production-service' }}
+  ECS_TASK_DEFINITION: ${{ vars.ECS_TASK_DEFINITION || 'shu-chatbot-production' }}
+  CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'shu-chatbot-production' }}
   TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
   TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE || 'shu-chatbot-tf-lock' }}
 
@@ -175,7 +176,7 @@ jobs:
         shell: bash
         run: |
           aws ecs describe-task-definition \
-            --task-definition "${ECS_SERVICE}" \
+            --task-definition "${ECS_TASK_DEFINITION}" \
             --query taskDefinition \
             > task-definition.json
           echo "📋 Task definition downloaded."
@@ -208,6 +209,7 @@ jobs:
             echo "|---|---|"
             echo "| Image tag | ${{ steps.meta.outputs.image_tag }} |"
             echo "| Image URI | ${{ steps.build.outputs.image_uri }} |"
+            echo "| ECS Task Definition | ${ECS_TASK_DEFINITION} |"
             echo "| ECS Cluster | ${ECS_CLUSTER} |"
             echo "| ECS Service | ${ECS_SERVICE} |"
             echo "| Region | ${AWS_REGION} |"
