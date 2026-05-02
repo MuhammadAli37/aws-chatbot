@@ -1,0 +1,120 @@
+name: Bootstrap Terraform Backend
+
+# Run ONCE manually before any other workflow.
+# Creates the S3 bucket + DynamoDB table that Terraform uses to store state.
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: AWS region to create the backend resources in
+        required: true
+        default: us-east-1
+        type: string
+      state_bucket_name:
+        description: S3 bucket name for Terraform state (must be globally unique)
+        required: true
+        type: string
+      lock_table_name:
+        description: DynamoDB table name for state locking
+        required: true
+        default: shu-chatbot-tf-lock
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  bootstrap:
+    name: Create Terraform Backend Resources
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ github.event.inputs.aws_region }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+
+      - name: Create S3 bucket for Terraform state
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BUCKET="${{ github.event.inputs.state_bucket_name }}"
+          REGION="${{ github.event.inputs.aws_region }}"
+
+          # Check if bucket already exists
+          if aws s3api head-bucket --bucket "${BUCKET}" 2>/dev/null; then
+            echo "⚠️  Bucket '${BUCKET}' already exists — skipping creation."
+          else
+            if [[ "${REGION}" == "us-east-1" ]]; then
+              aws s3api create-bucket \
+                --bucket "${BUCKET}" \
+                --region "${REGION}"
+            else
+              aws s3api create-bucket \
+                --bucket "${BUCKET}" \
+                --region "${REGION}" \
+                --create-bucket-configuration LocationConstraint="${REGION}"
+            fi
+            echo "✅ Bucket '${BUCKET}' created."
+          fi
+
+          # Enable versioning so state history is preserved
+          aws s3api put-bucket-versioning \
+            --bucket "${BUCKET}" \
+            --versioning-configuration Status=Enabled
+          echo "✅ Versioning enabled."
+
+          # Block all public access
+          aws s3api put-public-access-block \
+            --bucket "${BUCKET}" \
+            --public-access-block-configuration \
+              BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          echo "✅ Public access blocked."
+
+          # Enable server-side encryption
+          aws s3api put-bucket-encryption \
+            --bucket "${BUCKET}" \
+            --server-side-encryption-configuration \
+              '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          echo "✅ Encryption enabled."
+
+      - name: Create DynamoDB table for state locking
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TABLE="${{ github.event.inputs.lock_table_name }}"
+          REGION="${{ github.event.inputs.aws_region }}"
+
+          # Check if table already exists
+          if aws dynamodb describe-table --table-name "${TABLE}" --region "${REGION}" 2>/dev/null; then
+            echo "⚠️  DynamoDB table '${TABLE}' already exists — skipping creation."
+          else
+            aws dynamodb create-table \
+              --table-name "${TABLE}" \
+              --attribute-definitions AttributeName=LockID,AttributeType=S \
+              --key-schema AttributeName=LockID,KeyType=HASH \
+              --billing-mode PAY_PER_REQUEST \
+              --region "${REGION}"
+            echo "✅ DynamoDB table '${TABLE}' created."
+          fi
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## ✅ Terraform Backend Bootstrap Complete"
+            echo ""
+            echo "| Resource | Name |"
+            echo "|---|---|"
+            echo "| S3 Bucket | ${{ github.event.inputs.state_bucket_name }} |"
+            echo "| DynamoDB Table | ${{ github.event.inputs.lock_table_name }} |"
+            echo "| Region | ${{ github.event.inputs.aws_region }} |"
+            echo ""
+            echo "### Next Step"
+            echo "Update \`infra/backend.tf\` with these values, then run the **Deploy** workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

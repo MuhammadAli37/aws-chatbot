@@ -1,0 +1,101 @@
+name: Destroy AWS Infrastructure
+
+# ⚠️  DANGER: This workflow destroys ALL AWS resources created by Terraform.
+# Requires manual confirmation input to prevent accidental runs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type "destroy" to confirm you want to tear down all infrastructure
+        required: true
+        type: string
+      aws_region:
+        description: AWS region (must match the region used during deploy)
+        required: true
+        default: us-east-1
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ github.event.inputs.aws_region }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE || 'shu-chatbot-tf-lock' }}
+
+concurrency:
+  group: shu-chatbot-production
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    environment: production
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      # ── Guard: require explicit confirmation ─────────────────────────────────
+      - name: Confirm destroy intent
+        shell: bash
+        run: |
+          if [[ "${{ github.event.inputs.confirm }}" != "destroy" ]]; then
+            echo "❌ Confirmation input was '${{ github.event.inputs.confirm }}' — expected 'destroy'."
+            echo "   Re-run the workflow and type exactly: destroy"
+            exit 1
+          fi
+          echo "✅ Confirmation accepted. Proceeding with destroy."
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=shu-chatbot/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy \
+            -var="aws_region=${AWS_REGION}" \
+            -var="google_api_key=${{ secrets.GOOGLE_API_KEY }}" \
+            -auto-approve
+          echo "✅ All infrastructure destroyed."
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## 🗑️ Infrastructure Destroyed"
+            echo ""
+            echo "All AWS resources managed by Terraform have been removed."
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Region | ${AWS_REGION} |"
+            echo "| Triggered by | ${{ github.actor }} |"
+            echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |"
+            echo ""
+            echo "> The Terraform state S3 bucket and DynamoDB lock table were **not** deleted."
+            echo "> Remove them manually via the AWS Console if no longer needed."
+          } >> "$GITHUB_STEP_SUMMARY"

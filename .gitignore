@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+chroma_db_pdf/
+chroma_db_book/
+temp_uploaded.*
+data.pdf
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+tfplan

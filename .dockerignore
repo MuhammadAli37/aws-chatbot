@@ -1,0 +1,17 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+.env
+chroma_db_pdf/
+chroma_db_book/
+temp_uploaded.*
+data.pdf
+.pytest_cache
+*.egg-info
+dist/
+build/
+infra/
+.terraform/
+*.tfstate
+*.tfstate.*
