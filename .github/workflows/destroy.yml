@@ -55,6 +55,26 @@ jobs:
           terraform_version: "~1.9"
           terraform_wrapper: false
 
+      # ── Empty ECR before Terraform destroy ───────────────────────────────────
+      - name: Empty ECR Repository
+        shell: bash
+        run: |
+          IMAGE_IDS=$(aws ecr list-images \
+            --repository-name shu-chatbot-production \
+            --region ${AWS_REGION} \
+            --query 'imageIds[*]' \
+            --output json)
+
+          if [[ "${IMAGE_IDS}" == "[]" ]]; then
+            echo "ℹ️  ECR repository is already empty."
+          else
+            aws ecr batch-delete-image \
+              --repository-name shu-chatbot-production \
+              --region ${AWS_REGION} \
+              --image-ids "${IMAGE_IDS}"
+            echo "✅ ECR images deleted."
+          fi
+
       - name: Terraform Init
         working-directory: infra
         run: |
