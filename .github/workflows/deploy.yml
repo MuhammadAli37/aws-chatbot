@@ -49,16 +49,15 @@ concurrency:
 
 jobs:
 
-  # ─────────────────────────────────────────────
-  # Terraform Job
-  # ─────────────────────────────────────────────
   terraform:
     name: Terraform Plan & Apply
     runs-on: ubuntu-latest
     environment: production
     if: ${{ github.event.inputs.deploy_only != 'true' }}
 
-    # ❌ IMPORTANT: removed infra working-directory
+    defaults:
+      run:
+        working-directory: infra   # ✅ FIX: critical missing part
 
     outputs:
       ecr_repository_url: ${{ steps.tf-outputs.outputs.ecr_repository_url }}
@@ -106,9 +105,6 @@ jobs:
           echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)" >> $GITHUB_OUTPUT
           echo "ecs_service_name=$(terraform output -raw ecs_service_name)" >> $GITHUB_OUTPUT
 
-  # ─────────────────────────────────────────────
-  # Deploy Job
-  # ─────────────────────────────────────────────
   deploy:
     name: Build & Deploy to ECS
     runs-on: ubuntu-latest
@@ -177,5 +173,4 @@ jobs:
           wait-for-service-stability: true
 
       - name: Summary
-        run: |
-          echo "Deployment complete"
+        run: echo "Deployment complete"
