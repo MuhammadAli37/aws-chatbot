@@ -8,19 +8,21 @@ on:
       - 'app/**'
       - 'Dockerfile'
       - 'requirements.txt'
-      - 'infra/**'
       - '.github/workflows/deploy.yml'
+
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Optional image tag override. Leave blank to use the commit SHA.
+        description: Optional image tag override. Leave blank to use commit SHA.
         required: false
         type: string
+
       terraform_only:
-        description: Run Terraform only (skip Docker build & ECS deploy)
+        description: Run Terraform only (skip Docker & deploy)
         required: false
         default: false
         type: boolean
+
       deploy_only:
         description: Run ECS deploy only (skip Terraform)
         required: false
@@ -46,16 +48,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ── Job 1: Terraform ────────────────────────────────────────────────────────
+
+  # ─────────────────────────────────────────────
+  # Terraform Job
+  # ─────────────────────────────────────────────
   terraform:
     name: Terraform Plan & Apply
     runs-on: ubuntu-latest
     environment: production
     if: ${{ github.event.inputs.deploy_only != 'true' }}
 
-    defaults:
-      run:
-        working-directory: infra
+    # ❌ IMPORTANT: removed infra working-directory
 
     outputs:
       ecr_repository_url: ${{ steps.tf-outputs.outputs.ecr_repository_url }}
@@ -63,7 +66,7 @@ jobs:
       ecs_service_name: ${{ steps.tf-outputs.outputs.ecs_service_name }}
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
@@ -87,51 +90,42 @@ jobs:
             -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
 
       - name: Terraform Plan
-        id: plan
         run: |
           terraform plan \
             -var="aws_region=${AWS_REGION}" \
             -var="google_api_key=${{ secrets.GOOGLE_API_KEY }}" \
             -out=tfplan
-          echo "✅ Terraform plan complete"
 
       - name: Terraform Apply
-        run: |
-          terraform apply -auto-approve tfplan
-          echo "✅ Terraform apply complete"
+        run: terraform apply -auto-approve tfplan
 
-      - name: Capture Terraform outputs
+      - name: Capture outputs
         id: tf-outputs
         run: |
-          echo "ecr_repository_url=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
-          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)"     >> "$GITHUB_OUTPUT"
-          echo "ecs_service_name=$(terraform output -raw ecs_service_name)"     >> "$GITHUB_OUTPUT"
+          echo "ecr_repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)" >> $GITHUB_OUTPUT
+          echo "ecs_service_name=$(terraform output -raw ecs_service_name)" >> $GITHUB_OUTPUT
 
-  # ── Job 2: Build & Deploy ───────────────────────────────────────────────────
+  # ─────────────────────────────────────────────
+  # Deploy Job
+  # ─────────────────────────────────────────────
   deploy:
-    name: Build Image & Deploy to ECS
+    name: Build & Deploy to ECS
     runs-on: ubuntu-latest
     environment: production
     if: ${{ github.event.inputs.terraform_only != 'true' }}
-    needs: [terraform]
+    needs: terraform
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate required secrets
-        shell: bash
+      - name: Validate secrets
         run: |
-          set -euo pipefail
           if [[ -z "${{ secrets.GOOGLE_API_KEY }}" ]]; then
-            echo "❌ GOOGLE_API_KEY secret is required."
+            echo "Missing GOOGLE_API_KEY"
             exit 1
           fi
-          if [[ -z "${{ vars.AWS_ROLE_TO_ASSUME }}" ]]; then
-            echo "❌ AWS_ROLE_TO_ASSUME variable is required."
-            exit 1
-          fi
-          echo "✅ All required configuration is present."
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -139,78 +133,49 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
 
-      - name: Decide image tag
+      - name: Set image tag
         id: meta
-        shell: bash
         run: |
-          image_tag=""
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            image_tag="${{ github.event.inputs.image_tag }}"
+          TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=${GITHUB_SHA::12}
           fi
-          if [[ -z "${image_tag}" ]]; then
-            image_tag="${GITHUB_SHA::12}"
-          fi
-          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
-          echo "🏷️  Image tag: ${image_tag}"
+          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Log in to Amazon ECR
-        id: ecr-login
+      - name: Login to ECR
+        id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Docker image
+      - name: Build & Push Docker image
         id: build
-        shell: bash
-        env:
-          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
         run: |
-          set -euo pipefail
-          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-          echo "🐳 Building: ${IMAGE_URI}"
-          docker build --tag "${IMAGE_URI}" .
-          docker push "${IMAGE_URI}"
-          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
-          echo "✅ Image pushed: ${IMAGE_URI}"
+          IMAGE_URI="${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${{ steps.meta.outputs.image_tag }}"
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
-      - name: Download current task definition
-        shell: bash
+      - name: Download task definition
         run: |
           aws ecs describe-task-definition \
             --task-definition "${ECS_TASK_DEFINITION}" \
-            --query taskDefinition \
-            > task-definition.json
-          echo "📋 Task definition downloaded."
+            --query taskDefinition > task-definition.json
 
-      - name: Inject new image into task definition
-        id: task-def
+      - name: Render task definition
+        id: task
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.build.outputs.image_uri }}
-          environment-variables: |
-            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
 
-      - name: Deploy to Amazon ECS
+      - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          task-definition: ${{ steps.task.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
 
-      - name: Deployment summary
-        shell: bash
+      - name: Summary
         run: |
-          {
-            echo "## ✅ Deployment complete"
-            echo ""
-            echo "| Field | Value |"
-            echo "|---|---|"
-            echo "| Image tag | ${{ steps.meta.outputs.image_tag }} |"
-            echo "| Image URI | ${{ steps.build.outputs.image_uri }} |"
-            echo "| ECS Task Definition | ${ECS_TASK_DEFINITION} |"
-            echo "| ECS Cluster | ${ECS_CLUSTER} |"
-            echo "| ECS Service | ${ECS_SERVICE} |"
-            echo "| Region | ${AWS_REGION} |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployment complete"
