@@ -102,6 +102,7 @@ resource "aws_security_group" "ecs_tasks" {
 resource "aws_ecr_repository" "app" {
   name                 = local.name_prefix
   image_tag_mutability = "MUTABLE"
+  force_delete         = true   # ✅ allows deletion even when images exist
 
   image_scanning_configuration {
     scan_on_push = true
@@ -303,7 +304,7 @@ resource "aws_ecs_service" "app" {
   depends_on = [aws_lb_listener.http]
 
   lifecycle {
-    ignore_changes = [task_definition]  # Let GitHub Actions manage image updates
+    ignore_changes = [task_definition]
   }
 
   tags = local.common_tags
