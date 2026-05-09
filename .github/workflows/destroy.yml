@@ -32,10 +32,12 @@ jobs:
       run:
         working-directory: infra
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       # ── Guard: require explicit confirmation ─────────────────────────────────
       - name: Confirm destroy intent
         shell: bash
-        working-directory: ${{ runner.temp }}   # ✅ FIX: use a directory that always exists
         run: |
           if [[ "${{ github.event.inputs.confirm }}" != "destroy" ]]; then
             echo "❌ Confirmation input was '${{ github.event.inputs.confirm }}' — expected 'destroy'."
@@ -43,9 +45,6 @@ jobs:
             exit 1
           fi
           echo "✅ Confirmation accepted. Proceeding with destroy."
-
-      - name: Check out repository
-        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
