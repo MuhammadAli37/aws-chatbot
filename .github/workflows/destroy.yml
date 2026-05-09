@@ -1,8 +1,5 @@
 name: Destroy AWS Infrastructure
 
-# ⚠️  DANGER: This workflow destroys ALL AWS resources created by Terraform.
-# Requires manual confirmation input to prevent accidental runs.
-
 on:
   workflow_dispatch:
     inputs:
@@ -10,8 +7,9 @@ on:
         description: Type "destroy" to confirm you want to tear down all infrastructure
         required: true
         type: string
+
       aws_region:
-        description: AWS region (must match the region used during deploy)
+        description: AWS region
         required: true
         default: us-east-1
         type: string
@@ -35,24 +33,23 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
 
-    defaults:
-      run:
-        working-directory: infra
-
     steps:
-      # ── Guard: require explicit confirmation ─────────────────────────────────
       - name: Confirm destroy intent
         shell: bash
         run: |
           if [[ "${{ github.event.inputs.confirm }}" != "destroy" ]]; then
-            echo "❌ Confirmation input was '${{ github.event.inputs.confirm }}' — expected 'destroy'."
-            echo "   Re-run the workflow and type exactly: destroy"
+            echo "❌ Confirmation failed."
+            echo "Type exactly: destroy"
             exit 1
           fi
-          echo "✅ Confirmation accepted. Proceeding with destroy."
 
-      - name: Check out repository
+          echo "✅ Confirmation accepted"
+
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Show repository files
+        run: ls -R
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -80,7 +77,6 @@ jobs:
             -var="aws_region=${AWS_REGION}" \
             -var="google_api_key=${{ secrets.GOOGLE_API_KEY }}" \
             -auto-approve
-          echo "✅ All infrastructure destroyed."
 
       - name: Summary
         shell: bash
@@ -95,7 +91,4 @@ jobs:
             echo "| Region | ${AWS_REGION} |"
             echo "| Triggered by | ${{ github.actor }} |"
             echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |"
-            echo ""
-            echo "> The Terraform state S3 bucket and DynamoDB lock table were **not** deleted."
-            echo "> Remove them manually via the AWS Console if no longer needed."
           } >> "$GITHUB_STEP_SUMMARY"
